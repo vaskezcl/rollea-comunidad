@@ -1,19 +1,24 @@
 import { useEffect, useState } from "react";
 import { supabase } from "./supabaseClient";
+import { ensureProfile } from "./services/profiles";
+
 
 export default function App() {
   const [session, setSession] = useState(null);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
-      setSession(data.session);
-    });
+  setSession(data.session);
+  if (data.session?.user) ensureProfile(data.session.user);
+});
+
 
     const { data: listener } = supabase.auth.onAuthStateChange(
-      (_event, session) => {
-        setSession(session);
-      }
-    );
+  (_event, session) => {
+    setSession(session);
+    if (session?.user) ensureProfile(session.user);
+  }
+);
 
     return () => {
       listener.subscription.unsubscribe();
