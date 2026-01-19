@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { supabase } from "./supabaseClient";
 import { ensureProfile } from "./services/profiles";
+import { getMyProfile, updateMyProfile } from "./services/profiles";
+
 
 
 export default function App() {
@@ -91,6 +93,37 @@ function Dashboard({ session }) {
   const [attendance, setAttendance] = useState({});
   const [error, setError] = useState("");
   const [showAll, setShowAll] = useState(false);
+  const [birthdate, setBirthdate] = useState("");
+  const [savingBirthdate, setSavingBirthdate] = useState(false);
+  const [birthdayToday, setBirthdayToday] = useState(false);
+
+
+  function isBirthdayToday(birthdate) {
+  if (!birthdate) return false;
+
+  const today = new Date();
+  const b = new Date(birthdate);
+
+  return (
+    today.getDate() === b.getDate() &&
+    today.getMonth() === b.getMonth()
+  );
+}
+
+
+  useEffect(() => {
+  async function loadProfile() {
+    const { data, error } = await getMyProfile(userId);
+    if (!error && data?.birthdate) {
+      setBirthdate(data.birthdate);
+      setBirthdayToday(isBirthdayToday(data.birthdate));
+    }
+  }
+
+  loadProfile();
+}, [userId]);
+
+
 
   function startOfWeek(date = new Date()) {
   const d = new Date(date);
@@ -228,6 +261,32 @@ function isPast(startsAt) {
 
       <button onClick={signOut}>Salir</button>
     </div>
+
+    <div style={{ marginBottom: 20 }}>
+  <label style={{ fontSize: 14, opacity: 0.8 }}>
+    🎂 Tu cumpleaños
+  </label>
+
+  <div style={{ display: "flex", gap: 10, marginTop: 6 }}>
+    <input
+      type="date"
+      value={birthdate || ""}
+      onChange={(e) => setBirthdate(e.target.value)}
+    />
+
+    <button
+      disabled={savingBirthdate}
+      onClick={async () => {
+        setSavingBirthdate(true);
+        await updateMyProfile(userId, { birthdate });
+        setSavingBirthdate(false);
+      }}
+    >
+      Guardar
+    </button>
+  </div>
+</div>
+
 
       {error && <p style={{ color: "crimson" }}>{error}</p>}
 

@@ -29,3 +29,18 @@ export async function ensureProfile(user) {
     }
   }
 }
+
+export async function getMyProfile(userId) {
+  return supabase
+    .from("profiles")
+    .select("id, birthdate, birthday_dismissed_on")
+    .eq("id", userId)
+    .single();
+}
+
+export async function updateMyProfile(userId, values) {
+  return supabase
+    .from("profiles")
+    .update(values)
+    .eq("id", userId);
+}
