@@ -4,22 +4,24 @@ import { ensureProfile } from "./services/profiles";
 import { getMyProfile, updateMyProfile } from "./services/profiles";
 import confetti from "canvas-confetti";
 
+import { BrowserRouter, Routes, Route, Link } from "react-router-dom";
+import UserProfile from "./UserProfile";
+
 export default function App() {
   const [session, setSession] = useState(null);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
-  setSession(data.session);
-  if (data.session?.user) ensureProfile(data.session.user);
-});
-
+      setSession(data.session);
+      if (data.session?.user) ensureProfile(data.session.user);
+    });
 
     const { data: listener } = supabase.auth.onAuthStateChange(
-  (_event, session) => {
-    setSession(session);
-    if (session?.user) ensureProfile(session.user);
-  }
-);
+      (_event, session) => {
+        setSession(session);
+        if (session?.user) ensureProfile(session.user);
+      }
+    );
 
     return () => {
       listener.subscription.unsubscribe();
@@ -27,10 +29,26 @@ export default function App() {
   }, []);
 
   return (
-    <div style={{ maxWidth: 600, margin: "40px auto", fontFamily: "system-ui" }}>
-      <h1>Rollea Comunidad</h1>
-      {!session ? <Auth /> : <Dashboard session={session} />}
-    </div>
+    <BrowserRouter>
+      <Routes>
+        <Route
+          path="/"
+          element={
+            <div
+              style={{
+                maxWidth: 600,
+                margin: "40px auto",
+                fontFamily: "system-ui",
+              }}
+            >
+              <h1>Rollea Comunidad</h1>
+              {!session ? <Auth /> : <Dashboard session={session} />}
+            </div>
+          }
+        />
+        <Route path="/u/:id" element={<UserProfile />} />
+      </Routes>
+    </BrowserRouter>
   );
 }
 
@@ -41,19 +59,13 @@ function Auth() {
 
   const signUp = async () => {
     setMsg("");
-    const { error } = await supabase.auth.signUp({
-      email,
-      password,
-    });
+    const { error } = await supabase.auth.signUp({ email, password });
     setMsg(error ? error.message : "Cuenta creada. Ahora inicia sesión.");
   };
 
   const signIn = async () => {
     setMsg("");
-    const { error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
     setMsg(error ? error.message : "Sesión iniciada.");
   };
 
@@ -65,7 +77,7 @@ function Auth() {
         placeholder="Email"
         value={email}
         onChange={(e) => setEmail(e.target.value)}
-        style={{ width: "100%", padding: 10, marginBottom: 10 }}
+        style={{ width: "100%", padding: 10, marginBottom: 10, boxSizing: "border-box" }}
       />
 
       <input
@@ -73,7 +85,7 @@ function Auth() {
         type="password"
         value={password}
         onChange={(e) => setPassword(e.target.value)}
-        style={{ width: "100%", padding: 10, marginBottom: 10 }}
+        style={{ width: "100%", padding: 10, marginBottom: 10, boxSizing: "border-box" }}
       />
 
       <div style={{ display: "flex", gap: 10 }}>
@@ -102,8 +114,61 @@ function Dashboard({ session }) {
   const [joinRequests, setJoinRequests] = useState({}); // { community_id: status }
   const [selectedCommunityId, setSelectedCommunityId] = useState("");
   const [pendingRequests, setPendingRequests] = useState([]);
+  const [goingInfo, setGoingInfo] = useState({});
+  // { [activityId]: { count: number, users: {id,name}[] } }
+  const [displayName, setDisplayName] = useState("");
+  const [visibility, setVisibility] = useState("public"); // public | private
+  const [savingProfile, setSavingProfile] = useState(false);
 
   
+const loadGoingInfo = async (activityIds) => {
+  if (!activityIds?.length) {
+    setGoingInfo({});
+    return;
+  }
+
+  setError("");
+
+  const { data, error } = await supabase
+    .from("attendance")
+    .select(`
+      activity_id,
+      profiles:profiles (
+        id,
+        display_name,
+        attendance_visibility
+      )
+    `)
+    .in("activity_id", activityIds)
+    .eq("status", "going");
+
+  if (error) {
+    setError(error.message);
+    return;
+  }
+
+  const map = {};
+
+  for (const row of data || []) {
+    const actId = row.activity_id;
+    if (!map[actId]) map[actId] = { count: 0, users: [] };
+
+    map[actId].count += 1;
+
+    const p = row.profiles;
+    if (p && p.attendance_visibility === "public") {
+      const name = (p.display_name || "").trim() || "Usuario";
+      if (map[actId].users.length < 5) {
+  map[actId].users.push({ id: p.id, name });
+}
+
+    }
+  }
+
+  setGoingInfo(map);
+};
+
+
   const isAdminOfSelected =
   selectedCommunityId && memberships[selectedCommunityId] === "admin";
 
@@ -114,7 +179,18 @@ function Dashboard({ session }) {
 
   const { data, error } = await supabase
     .from("community_join_requests")
-    .select("id, user_id, status, created_at, message")
+    .select(`
+  id,
+  user_id,
+  status,
+  created_at,
+  message,
+  profiles:profiles (
+    id,
+    display_name
+  )
+`)
+
     .eq("community_id", selectedCommunityId)
     .eq("status", "pending")
     .order("created_at", { ascending: true });
@@ -298,25 +374,26 @@ const rejectRequest = async (req) => {
   useEffect(() => {
   async function loadProfile() {
     const { data, error } = await getMyProfile(userId);
-    if (!error && data?.birthdate) {
-  setBirthdate(data.birthdate);
+    if (error || !data) return;
 
-  const isToday = isBirthdayToday(data.birthdate);
-  setBirthdayToday(isToday);
+    // 🎂 Cumpleaños (si existe)
+    if (data.birthdate) setBirthdate(data.birthdate);
 
-  const dismissedToday =
-    data.birthday_dismissed_on ===
-    new Date().toISOString().slice(0, 10);
+    const isToday = isBirthdayToday(data.birthdate);
+    setBirthdayToday(isToday);
 
-  setShouldShowBirthdayMessage(isToday && !dismissedToday);
-}
+    const dismissedToday =
+      data.birthday_dismissed_on === new Date().toISOString().slice(0, 10);
 
+    setShouldShowBirthdayMessage(isToday && !dismissedToday);
+
+    // 👤 Perfil (siempre)
+    setDisplayName(data.display_name || "");
+    setVisibility(data.attendance_visibility || "public");
   }
 
   loadProfile();
 }, [userId]);
-
-
 
   function startOfWeek(date = new Date()) {
   const d = new Date(date);
@@ -377,6 +454,10 @@ if (actsError) {
 
     setActivities(acts || []);
     setAttendance(map);
+
+await loadGoingInfo((acts || []).map((a) => a.id));
+
+
   };
 
   useEffect(() => {
@@ -547,7 +628,13 @@ function isPast(startsAt) {
       pendingRequests.map((r) => (
         <div key={r.id} style={{ display: "flex", justifyContent: "space-between", gap: 10, padding: "8px 0", borderTop: "1px solid #f2f2f2" }}>
           <div style={{ fontSize: 13 }}>
-            <div><strong>User:</strong> {r.user_id}</div>
+            <div>
+  <strong>User:</strong>{" "}
+  <Link to={`/u/${r.user_id}`} style={{ textDecoration: "underline" }}>
+    {(r.profiles?.display_name || "").trim() || "Usuario"}
+  </Link>
+</div>
+
             {r.message && <div style={{ opacity: 0.8 }}>{r.message}</div>}
           </div>
 
@@ -633,6 +720,61 @@ function isPast(startsAt) {
   </div>
 </div>
 
+<div style={{ border: "1px solid #eee", borderRadius: 10, padding: 12, marginBottom: 12 }}>
+  <div style={{ fontWeight: 600, marginBottom: 8 }}>Tu perfil</div>
+
+  <div style={{ marginBottom: 10 }}>
+    <label style={{ fontSize: 13, opacity: 0.8 }}>Nombre público</label>
+    <input
+      value={displayName}
+      onChange={(e) => setDisplayName(e.target.value)}
+      placeholder="Ej: Alberto"
+      style={{ width: "100%", padding: 10, marginTop: 6, boxSizing: "border-box" }}
+    />
+  </div>
+
+  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+    <label style={{ fontSize: 13, opacity: 0.8 }}>Asistencia</label>
+
+    <select
+      value={visibility}
+      onChange={(e) => setVisibility(e.target.value)}
+      style={{ padding: 10, boxSizing: "border-box" }}
+    >
+      <option value="public">Pública (aparece tu nombre)</option>
+      <option value="private">Privada (solo suma al contador)</option>
+    </select>
+  </div>
+
+  <button
+    disabled={savingProfile}
+    onClick={async () => {
+      setSavingProfile(true);
+
+      const cleanName = displayName.trim();
+
+      const { error } = await updateMyProfile(userId, {
+        display_name: cleanName,
+        attendance_visibility: visibility,
+      });
+
+      if (error) {
+        setError(error.message);
+        setSavingProfile(false);
+        return;
+      }
+
+      setSavingProfile(false);
+
+      // ✅ refrescar "Quién va" para que se vea al tiro
+      await loadGoingInfo(activities.map((a) => a.id));
+    }}
+  >
+    Guardar perfil
+  </button>
+</div>
+
+
 
       {error && <p style={{ color: "crimson" }}>{error}</p>}
 
@@ -696,6 +838,34 @@ function isPast(startsAt) {
           Actividad finalizada ⏱️
         </div>
       )}
+
+<div style={{ marginTop: 8, fontSize: 13, opacity: 0.85 }}>
+  {(() => {
+    const info = goingInfo[a.id];
+    const count = info?.count || 0;
+    const users = info?.users || [];
+
+    if (count === 0) return "Aún nadie confirma asistencia.";
+    if (users.length === 0) return `Van: ${count}`;
+
+    const extra = count - users.length;
+
+    return (
+      <>
+        Van:{" "}
+        {users.map((u, idx) => (
+          <span key={u.id}>
+            <Link to={`/u/${u.id}`} style={{ textDecoration: "underline" }}>
+              {u.name}
+            </Link>
+            {idx < users.length - 1 ? ", " : ""}
+          </span>
+        ))}
+        {extra > 0 ? ` y ${extra} más` : ""} ({count})
+      </>
+    );
+  })()}
+</div>
 
       <div style={{ marginTop: 8, fontSize: 14, opacity: 0.8 }}>
         Tu respuesta:{" "}
