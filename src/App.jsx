@@ -97,7 +97,108 @@ function Dashboard({ session }) {
   const [birthdayToday, setBirthdayToday] = useState(false);
   const [shouldShowBirthdayMessage, setShouldShowBirthdayMessage] = useState(false);
   const [confettiFired, setConfettiFired] = useState(false);
+  const [communities, setCommunities] = useState([]);
+  const [memberships, setMemberships] = useState({}); // { community_id: role }
+  const [joinRequests, setJoinRequests] = useState({}); // { community_id: status }
+  const [selectedCommunityId, setSelectedCommunityId] = useState("");
+  const [pendingRequests, setPendingRequests] = useState([]);
 
+  
+  const isAdminOfSelected =
+  selectedCommunityId && memberships[selectedCommunityId] === "admin";
+
+  const loadPendingRequests = async () => {
+  if (!selectedCommunityId) return;
+
+  setError("");
+
+  const { data, error } = await supabase
+    .from("community_join_requests")
+    .select("id, user_id, status, created_at, message")
+    .eq("community_id", selectedCommunityId)
+    .eq("status", "pending")
+    .order("created_at", { ascending: true });
+
+  if (error) {
+    setError(error.message);
+    return;
+  }
+
+  setPendingRequests(data || []);
+};
+
+  const requestToJoin = async (communityId) => {
+  setError("");
+
+  const { error } = await supabase
+    .from("community_join_requests")
+    .insert({
+      community_id: communityId,
+      user_id: userId,
+      status: "pending",
+    });
+
+  if (error) {
+    setError(error.message);
+    return;
+  }
+
+  await loadCommunities();
+};
+ 
+  
+  const loadCommunities = async () => {
+  setError("");
+
+  // 1) comunidades
+  const { data: comms, error: commsError } = await supabase
+    .from("communities")
+    .select("id, name")
+    .order("created_at", { ascending: true });
+
+  if (commsError) {
+    setError(commsError.message);
+    return;
+  }
+
+  // 2) mis membresías
+  const { data: mems, error: memsError } = await supabase
+    .from("community_members")
+    .select("community_id, role")
+    .eq("user_id", userId);
+
+  if (memsError) {
+    setError(memsError.message);
+    return;
+  }
+
+  // 3) mis solicitudes
+  const { data: reqs, error: reqsError } = await supabase
+    .from("community_join_requests")
+    .select("community_id, status")
+    .eq("user_id", userId);
+
+  if (reqsError) {
+    setError(reqsError.message);
+    return;
+  }
+
+  const memMap = {};
+  mems?.forEach((m) => (memMap[m.community_id] = m.role));
+
+  const reqMap = {};
+  reqs?.forEach((r) => (reqMap[r.community_id] = r.status));
+
+  setCommunities(comms || []);
+  setMemberships(memMap);
+  setJoinRequests(reqMap);
+
+  // Default: primera comunidad donde soy miembro, o primera disponible
+  if (!selectedCommunityId) {
+    const firstMember = (comms || []).find((c) => memMap[c.id]);
+    setSelectedCommunityId(firstMember?.id || comms?.[0]?.id || "");
+  }
+};
 
   function fireBirthdayConfetti() {
   confetti({
@@ -123,6 +224,75 @@ function Dashboard({ session }) {
   return d === todayDay && m === todayMonth;
 }
 
+const approveRequest = async (req) => {
+  setError("");
+
+  // 1) marcar request como approved
+  const { error: updError } = await supabase
+    .from("community_join_requests")
+    .update({
+      status: "approved",
+      reviewed_by: userId,
+      reviewed_at: new Date().toISOString(),
+    })
+    .eq("id", req.id);
+
+  if (updError) {
+    setError(updError.message);
+    return;
+  }
+
+  // 2) crear membresía
+  const { error: insError } = await supabase
+    .from("community_members")
+    .insert({
+      community_id: selectedCommunityId,
+      user_id: req.user_id,
+      role: "member",
+    });
+
+  if (insError) {
+    setError(insError.message);
+    return;
+  }
+
+  await loadPendingRequests();
+};
+
+const rejectRequest = async (req) => {
+  setError("");
+
+  const { error } = await supabase
+    .from("community_join_requests")
+    .update({
+      status: "rejected",
+      reviewed_by: userId,
+      reviewed_at: new Date().toISOString(),
+    })
+    .eq("id", req.id);
+
+  if (error) {
+    setError(error.message);
+    return;
+  }
+
+  await loadPendingRequests();
+};
+
+
+  useEffect(() => {
+  loadCommunities();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, []);
+
+  useEffect(() => {
+  if (isAdminOfSelected) {
+    loadPendingRequests();
+  } else {
+    setPendingRequests([]);
+  }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [selectedCommunityId, memberships]);
 
 
   useEffect(() => {
@@ -170,8 +340,12 @@ function endOfWeek(date = new Date()) {
 
 let query = supabase
   .from("activities")
-  .select("id, title, starts_at, location, description")
+  .select("id, title, starts_at, location, description, community_id")
   .order("starts_at", { ascending: true });
+
+if (selectedCommunityId) {
+  query = query.eq("community_id", selectedCommunityId);
+}
 
 if (!showAll) {
   const weekStart = startOfWeek();
@@ -214,11 +388,11 @@ if (actsError) {
 
 
   useEffect(() => {
+  if (selectedCommunityId) {
     loadData();
+  }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showAll]);
-
-  
+}, [showAll, selectedCommunityId]);
 
   const markAttendance = async (activityId, status) => {
   setError("");
@@ -303,6 +477,9 @@ function isPast(startsAt) {
 
 
   return (
+
+
+    
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
@@ -314,6 +491,76 @@ function isPast(startsAt) {
 
       <button onClick={signOut}>Salir</button>
     </div>
+
+    
+
+    <div style={{ marginTop: 12, marginBottom: 12 }}>
+  <div style={{ fontSize: 14, opacity: 0.8, marginBottom: 6 }}>
+    Comunidad
+  </div>
+
+  
+
+  <select
+    value={selectedCommunityId}
+    onChange={(e) => setSelectedCommunityId(e.target.value)}
+    style={{ width: "100%", padding: 10 }}
+  >
+    {communities.map((c) => (
+      <option key={c.id} value={c.id}>
+        {c.name}
+        {memberships[c.id] ? " (miembro)" : joinRequests[c.id] ? ` (${joinRequests[c.id]})` : ""}
+      </option>
+    ))}
+  </select>
+
+    {!memberships[selectedCommunityId] && (
+    <div style={{ marginTop: 10 }}>
+      {joinRequests[selectedCommunityId] === "pending" && (
+        <div style={{ fontSize: 13, opacity: 0.8 }}>
+          Solicitud enviada ⏳ (pendiente)
+        </div>
+      )}
+
+      {joinRequests[selectedCommunityId] === "rejected" && (
+        <div style={{ fontSize: 13, opacity: 0.8 }}>
+          Solicitud rechazada ❌
+        </div>
+      )}
+
+      {!joinRequests[selectedCommunityId] && (
+        <button onClick={() => requestToJoin(selectedCommunityId)}>
+          Solicitar unirse
+        </button>
+      )}
+    </div>
+  )}
+</div>
+
+{isAdminOfSelected && (
+  <div style={{ border: "1px solid #eee", borderRadius: 10, padding: 12, marginBottom: 12 }}>
+    <div style={{ fontWeight: 600, marginBottom: 8 }}>Solicitudes pendientes</div>
+
+    {pendingRequests.length === 0 ? (
+      <div style={{ fontSize: 13, opacity: 0.7 }}>No hay solicitudes pendientes.</div>
+    ) : (
+      pendingRequests.map((r) => (
+        <div key={r.id} style={{ display: "flex", justifyContent: "space-between", gap: 10, padding: "8px 0", borderTop: "1px solid #f2f2f2" }}>
+          <div style={{ fontSize: 13 }}>
+            <div><strong>User:</strong> {r.user_id}</div>
+            {r.message && <div style={{ opacity: 0.8 }}>{r.message}</div>}
+          </div>
+
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={() => approveRequest(r)}>Aprobar</button>
+            <button onClick={() => rejectRequest(r)}>Rechazar</button>
+          </div>
+        </div>
+      ))
+    )}
+  </div>
+)}
+
 
     {shouldShowBirthdayMessage && (
   <div
