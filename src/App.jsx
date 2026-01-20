@@ -2,8 +2,7 @@ import { useEffect, useState } from "react";
 import { supabase } from "./supabaseClient";
 import { ensureProfile } from "./services/profiles";
 import { getMyProfile, updateMyProfile } from "./services/profiles";
-
-
+import confetti from "canvas-confetti";
 
 export default function App() {
   const [session, setSession] = useState(null);
@@ -96,28 +95,52 @@ function Dashboard({ session }) {
   const [birthdate, setBirthdate] = useState("");
   const [savingBirthdate, setSavingBirthdate] = useState(false);
   const [birthdayToday, setBirthdayToday] = useState(false);
+  const [shouldShowBirthdayMessage, setShouldShowBirthdayMessage] = useState(false);
+  const [confettiFired, setConfettiFired] = useState(false);
 
+
+  function fireBirthdayConfetti() {
+  confetti({
+    particleCount: 80,
+    spread: 70,
+    startVelocity: 25,
+    gravity: 0.9,
+    ticks: 180,
+    origin: { y: 0.6 },
+  });
+}
 
   function isBirthdayToday(birthdate) {
   if (!birthdate) return false;
 
-  const today = new Date();
-  const b = new Date(birthdate);
+  // birthdate viene como "YYYY-MM-DD"
+  const [y, m, d] = birthdate.split("-").map(Number);
 
-  return (
-    today.getDate() === b.getDate() &&
-    today.getMonth() === b.getMonth()
-  );
+  const today = new Date();
+  const todayDay = today.getDate();
+  const todayMonth = today.getMonth() + 1; // 1-12
+
+  return d === todayDay && m === todayMonth;
 }
+
 
 
   useEffect(() => {
   async function loadProfile() {
     const { data, error } = await getMyProfile(userId);
     if (!error && data?.birthdate) {
-      setBirthdate(data.birthdate);
-      setBirthdayToday(isBirthdayToday(data.birthdate));
-    }
+  setBirthdate(data.birthdate);
+
+  const isToday = isBirthdayToday(data.birthdate);
+  setBirthdayToday(isToday);
+
+  const dismissedToday =
+    data.birthday_dismissed_on ===
+    new Date().toISOString().slice(0, 10);
+
+  setShouldShowBirthdayMessage(isToday && !dismissedToday);
+}
+
   }
 
   loadProfile();
@@ -183,9 +206,19 @@ if (actsError) {
   };
 
   useEffect(() => {
+  if (shouldShowBirthdayMessage && !confettiFired) {
+    fireBirthdayConfetti();
+    setConfettiFired(true);
+  }
+}, [shouldShowBirthdayMessage, confettiFired]);
+
+
+  useEffect(() => {
     loadData();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showAll]);
+
+  
 
   const markAttendance = async (activityId, status) => {
   setError("");
@@ -213,6 +246,26 @@ if (actsError) {
   // Recarga desde DB para que quede 100% consistente
   await loadData();
 };
+
+const dismissBirthdayToday = async () => {
+  const todayStr = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+
+  // Guardar en DB
+  const { error } = await updateMyProfile(userId, {
+    birthday_dismissed_on: todayStr,
+  });
+
+  if (error) {
+    setError(error.message);
+    return;
+  }
+
+  // Ocultar en UI inmediatamente
+  setShouldShowBirthdayMessage(false);
+  setConfettiFired(false);
+
+};
+
 
   const signOut = async () => {
     await supabase.auth.signOut();
@@ -262,6 +315,36 @@ function isPast(startsAt) {
       <button onClick={signOut}>Salir</button>
     </div>
 
+    {shouldShowBirthdayMessage && (
+  <div
+    style={{
+      border: "1px solid #e6e6e6",
+      borderRadius: 10,
+      padding: 12,
+      marginTop: 12,
+      marginBottom: 12,
+      background: "var(--birthday-bg, #fafafa)",
+      color: "#111",
+      display: "flex",
+      justifyContent: "space-between",
+      gap: 12,
+      alignItems: "center",
+    }}
+  >
+    <div style={{ fontSize: 14 }}>
+      🎉 <strong>¡Feliz cumpleaños!</strong>{" "}
+      <span style={{ opacity: 0.8 }}>Que tengas un gran día.</span>
+    </div>
+
+    <div style={{ display: "flex", gap: 10 }}>
+      <button onClick={dismissBirthdayToday}>
+        No ver hoy
+      </button>
+    </div>
+  </div>
+)}
+
+
     <div style={{ marginBottom: 20 }}>
   <label style={{ fontSize: 14, opacity: 0.8 }}>
     🎂 Tu cumpleaños
@@ -275,15 +358,31 @@ function isPast(startsAt) {
     />
 
     <button
-      disabled={savingBirthdate}
-      onClick={async () => {
-        setSavingBirthdate(true);
-        await updateMyProfile(userId, { birthdate });
-        setSavingBirthdate(false);
-      }}
-    >
-      Guardar
-    </button>
+  disabled={savingBirthdate}
+  onClick={async () => {
+    setSavingBirthdate(true);
+
+    const { error } = await updateMyProfile(userId, { birthdate });
+
+    if (error) {
+      setError(error.message);
+      setSavingBirthdate(false);
+      return;
+    }
+
+    // 🔹 Recalcular cumpleaños inmediatamente
+    const isToday = isBirthdayToday(birthdate);
+    setBirthdayToday(isToday);
+
+    // 🔹 Como recién se guarda, asumimos que NO lo ha ocultado hoy
+    setShouldShowBirthdayMessage(isToday);
+
+    setSavingBirthdate(false);
+  }}
+>
+  Guardar
+</button>
+
   </div>
 </div>
 
