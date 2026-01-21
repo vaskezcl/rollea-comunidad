@@ -130,7 +130,10 @@ function Dashboard({ session }) {
   const [stravaError, setStravaError] = useState("");
   const [stravaStatusLoading, setStravaStatusLoading] = useState(false);
   const [stravaIsConnected, setStravaIsConnected] = useState(false);
-
+  const [kmYear, setKmYear] = useState(new Date().getFullYear());
+  const [kmLoading, setKmLoading] = useState(false);
+  const [kmData, setKmData] = useState({ km: 0, activities_count: 0 });
+  const [kmAutoSynced, setKmAutoSynced] = useState(false);
 
 
 useEffect(() => {
@@ -522,6 +525,45 @@ await loadGoingInfo((acts || []).map((a) => a.id));
   // eslint-disable-next-line react-hooks/exhaustive-deps
 }, [showAll, selectedCommunityId]);
 
+const syncYearKm = async (year) => {
+  setError("");
+  setKmLoading(true);
+
+  try {
+    const raw = JSON.parse(localStorage.getItem("sb-crehuacuhxpgdcohumlf-auth-token"));
+    const jwt = raw?.access_token;
+
+    if (!jwt) {
+      setError("No hay sesión activa.");
+      setKmLoading(false);
+      return;
+    }
+
+    const res = await fetch(
+      `https://crehuacuhxpgdcohumlf.functions.supabase.co/strava-sync-year?year=${year}`,
+      { headers: { Authorization: `Bearer ${jwt}` } }
+    );
+
+    const json = await res.json();
+
+    if (!res.ok) {
+      setError(json?.error || "Error al sincronizar km.");
+      setKmLoading(false);
+      return;
+    }
+
+    setKmData({
+      km: json.km || 0,
+      activities_count: json.activities_count || 0,
+    });
+  } catch (e) {
+    setError(String(e));
+  } finally {
+    setKmLoading(false);
+  }
+};
+
+
 const connectStrava = async () => {
   setStravaError("");
   setStravaLinking(true);
@@ -563,6 +605,40 @@ const connectStrava = async () => {
     setStravaLinking(false);
   }
 };
+
+const disconnectStrava = async () => {
+  setError("");
+
+  const { error } = await supabase
+    .from("strava_tokens")
+    .delete()
+    .eq("user_id", userId);
+
+  if (error) {
+    setError(error.message);
+    return;
+  }
+
+  // Actualizar estado en UI
+  setStravaIsConnected(false);
+
+  // 🔹 LIMPIEZA DE KILÓMETROS (ESTO ES LO NUEVO)
+  setKmData({ km: 0, activities_count: 0 });
+  setKmAutoSynced(false);
+  setKmYear(new Date().getFullYear());
+};
+
+useEffect(() => {
+  // Auto-sync solo si:
+  // - Strava está conectado
+  // - no está cargando el estado
+  // - aún no hicimos auto sync
+  if (!stravaStatusLoading && stravaIsConnected && !kmAutoSynced) {
+    syncYearKm(new Date().getFullYear());
+    setKmAutoSynced(true);
+  }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [stravaStatusLoading, stravaIsConnected, kmAutoSynced]);
 
 
   const markAttendance = async (activityId, status) => {
@@ -881,10 +957,74 @@ function isPast(startsAt) {
     Guardar perfil
   </button>
 
+  <hr style={{ border: "none", borderTop: "1px solid #eee", margin: "14px 0" }} />
+
+<div>
+  <div style={{ fontWeight: 600, marginBottom: 8 }}>
+    Kilómetros (InlineSkate)
+  </div>
+
+  <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 10 }}>
+    <select
+      value={kmYear}
+      onChange={(e) => setKmYear(Number(e.target.value))}
+      style={{ padding: 10, boxSizing: "border-box" }}
+    >
+      {Array.from({ length: 6 }).map((_, i) => {
+        const y = new Date().getFullYear() - i;
+        return (
+          <option key={y} value={y}>
+            {y}
+          </option>
+        );
+      })}
+    </select>
+
+    <button
+      disabled={kmLoading}
+      onClick={() => syncYearKm(kmYear)}
+      style={{ padding: "10px 12px" }}
+    >
+      {kmLoading ? "Sincronizando..." : "Sincronizar"}
+    </button>
+  </div>
+
+  <div style={{ fontSize: 14, opacity: 0.9 }}>
+    <div>
+      <strong>{kmData.km}</strong> km • {kmData.activities_count} actividades
+    </div>
+    <div style={{ fontSize: 12, opacity: 0.75, marginTop: 4 }}>
+      *Se calcula desde Strava filtrando sport_type = InlineSkate
+    </div>
+  </div>
+</div>
+
+
   <div style={{ marginTop: 10 }}>
+  {!stravaIsConnected ? (
   <button disabled={stravaLinking} onClick={connectStrava}>
     {stravaLinking ? "Conectando..." : "Conectar con Strava"}
   </button>
+) : (
+  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+    <div style={{ fontSize: 13, opacity: 0.85 }}>
+      ✅ Strava conectado
+    </div>
+
+    <button
+      onClick={disconnectStrava}
+      style={{
+        fontSize: 12,
+        padding: "6px 10px",
+        opacity: 0.8,
+      }}
+    >
+      Desconectar
+    </button>
+  </div>
+)}
+
+
 
   {stravaError && (
     <div style={{ marginTop: 8, color: "crimson", fontSize: 13 }}>
@@ -893,13 +1033,12 @@ function isPast(startsAt) {
   )}
 </div>
 
-<div style={{ marginTop: 8, fontSize: 13, opacity: 0.85 }}>
-  {stravaStatusLoading
-    ? "Comprobando Strava..."
-    : stravaIsConnected
-    ? "✅ Strava conectado"
-    : "❌ Strava no conectado"}
-</div>
+{!stravaIsConnected && (
+  <div style={{ marginTop: 8, fontSize: 13, opacity: 0.85 }}>
+    {stravaStatusLoading ? "Comprobando Strava..." : "❌ Strava no conectado"}
+  </div>
+)}
+
 
 
 </div>
