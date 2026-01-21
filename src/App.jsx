@@ -6,6 +6,9 @@ import confetti from "canvas-confetti";
 
 import { BrowserRouter, Routes, Route, Link } from "react-router-dom";
 import UserProfile from "./UserProfile";
+import StravaCallback from "./StravaCallback";
+
+
 
 export default function App() {
   const [session, setSession] = useState(null);
@@ -47,10 +50,13 @@ export default function App() {
           }
         />
         <Route path="/u/:id" element={<UserProfile />} />
+        <Route path="/strava-callback" element={<StravaCallback />} />
+
       </Routes>
     </BrowserRouter>
   );
 }
+
 
 function Auth() {
   const [email, setEmail] = useState("");
@@ -119,8 +125,48 @@ function Dashboard({ session }) {
   const [displayName, setDisplayName] = useState("");
   const [visibility, setVisibility] = useState("public"); // public | private
   const [savingProfile, setSavingProfile] = useState(false);
+  const [stravaConnected, setStravaConnected] = useState(false);
+  const [stravaLinking, setStravaLinking] = useState(false);
+  const [stravaError, setStravaError] = useState("");
+  const [stravaStatusLoading, setStravaStatusLoading] = useState(false);
+  const [stravaIsConnected, setStravaIsConnected] = useState(false);
 
+
+
+useEffect(() => {
+  const params = new URLSearchParams(window.location.search);
+  const connected = params.get("strava");
+
+  if (connected === "connected") {
+    setStravaConnected(true);
+
+    // Limpiar la URL sin recargar la página
+    window.history.replaceState({}, document.title, window.location.pathname);
+  }
+}, []);
   
+const loadStravaStatus = async () => {
+  setStravaStatusLoading(true);
+  setError("");
+
+  const { data, error } = await supabase
+    .from("strava_tokens")
+    .select("user_id")
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (error) {
+    setError(error.message);
+    setStravaStatusLoading(false);
+    return;
+  }
+
+  setStravaIsConnected(!!data);
+  setStravaStatusLoading(false);
+};
+
+
+
 const loadGoingInfo = async (activityIds) => {
   if (!activityIds?.length) {
     setGoingInfo({});
@@ -390,6 +436,7 @@ const rejectRequest = async (req) => {
     // 👤 Perfil (siempre)
     setDisplayName(data.display_name || "");
     setVisibility(data.attendance_visibility || "public");
+    await loadStravaStatus();
   }
 
   loadProfile();
@@ -474,6 +521,49 @@ await loadGoingInfo((acts || []).map((a) => a.id));
   }
   // eslint-disable-next-line react-hooks/exhaustive-deps
 }, [showAll, selectedCommunityId]);
+
+const connectStrava = async () => {
+  setStravaError("");
+  setStravaLinking(true);
+
+  try {
+    const { data } = await supabase.auth.getSession();
+    const token = data?.session?.access_token;
+
+    if (!token) {
+      setStravaError("No hay sesión activa. Vuelve a iniciar sesión.");
+      setStravaLinking(false);
+      return;
+    }
+
+    const res = await fetch(
+      "https://crehuacuhxpgdcohumlf.functions.supabase.co/strava-auth",
+      {
+        headers: { Authorization: "Bearer " + token },
+      }
+    );
+
+    const json = await res.json();
+
+    if (!res.ok) {
+      setStravaError(json?.error || json?.message || "Error conectando con Strava");
+      setStravaLinking(false);
+      return;
+    }
+
+    if (!json?.authorize_url) {
+      setStravaError("No se recibió authorize_url");
+      setStravaLinking(false);
+      return;
+    }
+
+    window.location.href = json.authorize_url;
+  } catch (e) {
+    setStravaError(String(e));
+    setStravaLinking(false);
+  }
+};
+
 
   const markAttendance = async (activityId, status) => {
   setError("");
@@ -573,7 +663,25 @@ function isPast(startsAt) {
       <button onClick={signOut}>Salir</button>
     </div>
 
-    
+    {stravaConnected && (
+  <div
+    style={{
+      border: "1px solid #d1fae5",
+      background: "#ecfdf5",
+      color: "#065f46",
+      padding: 12,
+      borderRadius: 10,
+      marginBottom: 12,
+      fontSize: 14,
+    }}
+  >
+    ✅ <strong>Strava conectado correctamente.</strong>  
+    <div style={{ opacity: 0.8 }}>
+      Ya puedes comenzar a sincronizar tus kilómetros.
+    </div>
+  </div>
+)}
+
 
     <div style={{ marginTop: 12, marginBottom: 12 }}>
   <div style={{ fontSize: 14, opacity: 0.8, marginBottom: 6 }}>
@@ -772,6 +880,28 @@ function isPast(startsAt) {
   >
     Guardar perfil
   </button>
+
+  <div style={{ marginTop: 10 }}>
+  <button disabled={stravaLinking} onClick={connectStrava}>
+    {stravaLinking ? "Conectando..." : "Conectar con Strava"}
+  </button>
+
+  {stravaError && (
+    <div style={{ marginTop: 8, color: "crimson", fontSize: 13 }}>
+      {stravaError}
+    </div>
+  )}
+</div>
+
+<div style={{ marginTop: 8, fontSize: 13, opacity: 0.85 }}>
+  {stravaStatusLoading
+    ? "Comprobando Strava..."
+    : stravaIsConnected
+    ? "✅ Strava conectado"
+    : "❌ Strava no conectado"}
+</div>
+
+
 </div>
 
 
