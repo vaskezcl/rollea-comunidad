@@ -2,9 +2,19 @@
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
+};
+
 serve(async (req) => {
+  // ✅ Responder preflight CORS
+  if (req.method === "OPTIONS") {
+    return new Response("ok", { headers: corsHeaders });
+  }
+
   try {
-    // 1) Leer token del usuario (Supabase session access_token)
     const authHeader = req.headers.get("Authorization") || "";
     const token = authHeader.startsWith("Bearer ")
       ? authHeader.slice("Bearer ".length)
@@ -13,17 +23,16 @@ serve(async (req) => {
     if (!token) {
       return new Response(JSON.stringify({ error: "Missing Authorization Bearer token" }), {
         status: 401,
-        headers: { "Content-Type": "application/json" },
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    // 2) Cliente para validar usuario (usa ANON, pero con header Authorization)
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const anonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
     const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const clientId = Deno.env.get("STRAVA_CLIENT_ID")!;
-    const siteUrl = Deno.env.get("SITE_URL")!; // ej https://rollea.com
 
+    // Validar usuario con token
     const supaAuth = createClient(supabaseUrl, anonKey, {
       global: { headers: { Authorization: `Bearer ${token}` } },
     });
@@ -32,15 +41,14 @@ serve(async (req) => {
     if (userErr || !userData?.user) {
       return new Response(JSON.stringify({ error: "Invalid session" }), {
         status: 401,
-        headers: { "Content-Type": "application/json" },
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
     const userId = userData.user.id;
 
-    // 3) Crear state (anti-CSRF) y guardarlo con Service Role
+    // Guardar state con Service Role
     const state = crypto.randomUUID();
-
     const supaAdmin = createClient(supabaseUrl, serviceRoleKey);
 
     const { error: insErr } = await supaAdmin.from("oauth_states").insert({
@@ -51,15 +59,14 @@ serve(async (req) => {
     if (insErr) {
       return new Response(JSON.stringify({ error: insErr.message }), {
         status: 500,
-        headers: { "Content-Type": "application/json" },
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    // 4) Armar URL de autorización Strava
-    const redirectUri = `${supabaseUrl.replace(".supabase.co", ".functions.supabase.co")}/strava-callback`;
+    const siteUrl = Deno.env.get("SITE_URL")!; // https://rollea.com
+    const redirectUri = `${siteUrl}/strava-callback`;
 
-    // scopes recomendados para sumar km:
-    // read + activity:read_all (para leer actividades y sus distancias)
+
     const authorizeUrl = new URL("https://www.strava.com/oauth/authorize");
     authorizeUrl.searchParams.set("client_id", clientId);
     authorizeUrl.searchParams.set("response_type", "code");
@@ -68,15 +75,22 @@ serve(async (req) => {
     authorizeUrl.searchParams.set("scope", "read,activity:read_all");
     authorizeUrl.searchParams.set("state", state);
 
-    // 5) Devolver URL al frontend
-    return new Response(JSON.stringify({ authorize_url: authorizeUrl.toString() }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    });
+    return new Response(
+  JSON.stringify({
+    site_url_env: Deno.env.get("SITE_URL"),
+    redirect_uri: redirectUri,
+    authorize_url: authorizeUrl.toString(),
+  }),
+  {
+    status: 200,
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
+  }
+);
+
   } catch (e) {
     return new Response(JSON.stringify({ error: String(e) }), {
       status: 500,
-      headers: { "Content-Type": "application/json" },
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
 });
