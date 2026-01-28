@@ -8,6 +8,15 @@ import { BrowserRouter, Routes, Route, Link } from "react-router-dom";
 import UserProfile from "./UserProfile";
 import StravaCallback from "./StravaCallback";
 
+function weekStartISO(date = new Date()) {
+  const d = new Date(date);
+  const day = d.getDay(); // 0=domingo
+  const diff = (day === 0 ? -6 : 1) - day; // lunes como inicio
+  d.setDate(d.getDate() + diff);
+  d.setHours(0, 0, 0, 0);
+  return d.toISOString().slice(0, 10); // YYYY-MM-DD
+}
+
 
 
 export default function App() {
@@ -134,6 +143,11 @@ function Dashboard({ session }) {
   const [kmLoading, setKmLoading] = useState(false);
   const [kmData, setKmData] = useState({ km: 0, activities_count: 0 });
   const [kmAutoSynced, setKmAutoSynced] = useState(false);
+  const [weeklyMy, setWeeklyMy] = useState(null); // { km, activities_count }
+  const [weeklyTop3, setWeeklyTop3] = useState([]);
+  const [weeklyLoading, setWeeklyLoading] = useState(false);
+  const [weeklyError, setWeeklyError] = useState("");
+
 
 
 useEffect(() => {
@@ -147,8 +161,10 @@ useEffect(() => {
     window.history.replaceState({}, document.title, window.location.pathname);
   }
 }, []);
+
+
   
-const loadStravaStatus = async () => {
+  const loadStravaStatus = async () => {
   setStravaStatusLoading(true);
   setError("");
 
@@ -168,6 +184,67 @@ const loadStravaStatus = async () => {
   setStravaStatusLoading(false);
 };
 
+const loadWeeklyTop3 = async () => {
+  if (!selectedCommunityId) return;
+
+  setWeeklyError("");
+
+  const ws = weekStartISO(new Date());
+
+  const { data, error } = await supabase
+    .from("strava_weekly_totals")
+    .select(`
+      user_id,
+      distance_m,
+      activities_count,
+      profiles:profiles (
+        id,
+        display_name
+      )
+    `)
+    .eq("community_id", selectedCommunityId)
+    .eq("week_start", ws)
+    .eq("sport_type", "InlineSkate")
+    .order("distance_m", { ascending: false })
+    .limit(3);
+
+  if (error) {
+    setWeeklyError(error.message);
+    return;
+  }
+
+  setWeeklyTop3(data || []);
+};
+
+const syncMyWeekly = async () => {
+  if (!selectedCommunityId) return;
+
+  setWeeklyLoading(true);
+  setWeeklyError("");
+
+  const ws = weekStartISO(new Date());
+
+  const { data, error } = await supabase.functions.invoke("strava-weekly-sync", {
+    body: {
+      community_id: selectedCommunityId,
+      week_start: ws,
+    },
+  });
+
+  setWeeklyLoading(false);
+
+  if (error) {
+    setWeeklyError(error.message);
+    return;
+  }
+
+  setWeeklyMy({
+    km: data?.km ?? 0,
+    activities_count: data?.activities_count ?? 0,
+  });
+
+  await loadWeeklyTop3();
+};
 
 
 const loadGoingInfo = async (activityIds) => {
@@ -403,6 +480,13 @@ const rejectRequest = async (req) => {
 
   await loadPendingRequests();
 };
+
+useEffect(() => {
+  if (selectedCommunityId) {
+    loadWeeklyTop3();
+  }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [selectedCommunityId]);
 
 
   useEffect(() => {
@@ -1039,9 +1123,59 @@ function isPast(startsAt) {
   </div>
 )}
 
+<div style={{ marginTop: 12, borderTop: "1px solid #eee", paddingTop: 12 }}>
+  <div style={{ fontWeight: 600, marginBottom: 6 }}>InlineSkate · Semana actual</div>
 
+  <div style={{ fontSize: 13, opacity: 0.85, marginBottom: 8 }}>
+    Semana inicia: <strong>{weekStartISO(new Date())}</strong>
+  </div>
+
+  <button disabled={weeklyLoading || !stravaIsConnected} onClick={syncMyWeekly}>
+    {weeklyLoading ? "Sincronizando..." : "Sincronizar semana"}
+  </button>
+
+  {weeklyMy && (
+    <div style={{ marginTop: 8, fontSize: 13, opacity: 0.9 }}>
+      Tus km esta semana: <strong>{weeklyMy.km} km</strong> ({weeklyMy.activities_count} actividades)
+    </div>
+  )}
+
+  {weeklyError && (
+    <div style={{ marginTop: 8, color: "crimson", fontSize: 13 }}>
+      {weeklyError}
+    </div>
+  )}
+
+  <div style={{ marginTop: 10, fontSize: 13 }}>
+    <strong>Top 3 semanal</strong>
+    {weeklyTop3.length === 0 ? (
+      <div style={{ opacity: 0.75, marginTop: 6 }}>
+        Aún no hay datos esta semana. (Cada uno debe sincronizar)
+      </div>
+    ) : (
+      <ol style={{ marginTop: 6, paddingLeft: 18 }}>
+        {weeklyTop3.map((r, idx) => {
+  const medal = idx === 0 ? "🥇" : idx === 1 ? "🥈" : "🥉";
+
+  return (
+    <li key={r.user_id} style={{ display: "flex", gap: 6, alignItems: "center" }}>
+      <span style={{ fontSize: 16 }}>{medal}</span>
+
+      <span>
+        {(r.profiles?.display_name || "Usuario")} —{" "}
+        <strong>{Math.round((r.distance_m / 1000) * 100) / 100} km</strong>
+      </span>
+    </li>
+  );
+})}
+
+      </ol>
+    )}
+  </div>
+</div>
 
 </div>
+
 
 
 
